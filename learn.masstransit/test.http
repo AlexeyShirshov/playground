@@ -1,0 +1,17 @@
+@baseUrl = http://localhost:5000
+
+@dev = 20b75e83-1a72-4498-bef6-edf27fc5e300
+
+GET {{baseUrl}}/awake/{{dev}}
+
+################################
+
+GET {{baseUrl}}/newday/{{dev}}
+
+################################
+
+GET {{baseUrl}}/howydoing/{{dev}}
+
+################################
+
+GET {{baseUrl}}/howydoing/{{$guid}}

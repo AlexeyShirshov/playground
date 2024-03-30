@@ -1,0 +1,6 @@
+.vs
+.vscode
+obj
+bin
+TestResults
+*.log
