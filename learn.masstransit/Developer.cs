@@ -6,6 +6,25 @@ public class Developer : MassTransitStateMachine<TheDeveloper>
 {
     public Developer()
     {
+        Event(() => Awake, config => config.CorrelateById(ctx => ctx.Message.Id));
+        Event(() => Tired, config => config.CorrelateById(ctx => ctx.Message.Id));
+        Event(() => NewDay, config => config.CorrelateById(ctx => ctx.Message.Id));
+        Event(() => HowYDoing, config =>
+        {
+            config.CorrelateById(ctx => ctx.Message.Id);
+            config.ReadOnly = true;
+            config.OnMissingInstance(behavior => behavior.Execute(context =>
+            {
+                context.Respond(new UnknownDeveloper());
+            }));
+        });
+        Event(() => Fire, config => config.CorrelateById(ctx => ctx.Message.Id));
+        Schedule(() => AutoTired, developer => developer.AutoTiredToken, configSchedule =>
+        {
+            configSchedule.Delay = TimeSpan.FromSeconds(5);
+            configSchedule.Received = r => r.CorrelateById(ctx => ctx.Message.Id);
+        });
+
         InstanceState(x => x.CurrentState,
             Performing, // 3
             Sleeping // 4
@@ -13,25 +32,28 @@ public class Developer : MassTransitStateMachine<TheDeveloper>
 
         Initially(
             When(Awake)
-                .ThenAsync(async (developerCtx) =>
+                .Then((developerCtx) =>
                 {
                     var developer = developerCtx.Saga;
                     Console.WriteLine($"{developer.Id} was in {developer.State} state, now start performing");
-                    await developerCtx.TransitionToState(Performing);
-                    Task.Run(async () =>
-                    {
-                        await Task.Delay(5000);
-                        await developerCtx.Publish<ITiredEvent>(new
-                        {
-                            developer.Id,
-                        });
-                    });
+                    // await developerCtx.TransitionToState(Performing);
+                    // Task.Run(async () =>
+                    // {
+                    //     await Task.Delay(5000);
+                    //     await developerCtx.Publish<ITiredEvent>(new
+                    //     {
+                    //         developer.Id,
+                    //     });
+                    // });
                 })
+                .TransitionTo(Performing)
                 .Respond(messageFactory => messageFactory.Saga)
+                .Schedule(AutoTired, ctx => ctx.Init<IAutoTiredEvent>(new { ctx.Saga.Id }))
         );
 
         During(Performing,
-            When(Tired)
+            //When(Tired)
+            When(AutoTired!.Received)
                 .ThenAsync(async (developerCtx) =>
                 {
                     var developer = developerCtx.Saga;
@@ -47,7 +69,8 @@ public class Developer : MassTransitStateMachine<TheDeveloper>
                         Console.WriteLine($"{developer.Id} was in {developer.State} state, now is tired, so going to sleep");
                         await developerCtx.TransitionToState(Sleeping);
                     }
-                }),
+                })
+                .Unschedule(AutoTired),
             When(Awake)
                 .Then((developerCtx) =>
                 {
@@ -59,21 +82,23 @@ public class Developer : MassTransitStateMachine<TheDeveloper>
 
         During(Sleeping,
             When(Awake, developerCtx => developerCtx.Saga.SleepCount < 2)
-                .ThenAsync(async (developerCtx) =>
+                .Then((developerCtx) =>
                 {
                     var developer = developerCtx.Saga;
                     Console.WriteLine($"{developer.Id} was in {developer.State} state, now start performing");
-                    await developerCtx.TransitionToState(Performing);
-                    Task.Run(async () =>
-                    {
-                        await Task.Delay(5000);
-                        await developerCtx.Publish<ITiredEvent>(new
-                        {
-                            developer.Id,
-                        });
-                    });
+                    // await developerCtx.TransitionToState(Performing);
+                    // Task.Run(async () =>
+                    // {
+                    //     await Task.Delay(5000);
+                    //     await developerCtx.Publish<ITiredEvent>(new
+                    //     {
+                    //         developer.Id,
+                    //     });
+                    // });
                 })
+                .TransitionTo(Performing)
                 .Respond(messageFactory => messageFactory.Saga)
+                .Schedule(AutoTired, ctx => ctx.Init<IAutoTiredEvent>(new { ctx.Saga.Id }))
         );
 
         During(Final,
@@ -83,7 +108,8 @@ public class Developer : MassTransitStateMachine<TheDeveloper>
                     var developer = developerCtx.Saga;
                     Console.WriteLine($"{developer.Id} is in home");
                 })
-                .Respond(messageFactory => messageFactory.Saga),
+                .Respond(messageFactory => messageFactory.Saga)
+                ,
             When(Tired)
                 .Then(developerCtx =>
                 {
@@ -108,18 +134,18 @@ public class Developer : MassTransitStateMachine<TheDeveloper>
             When(HowYDoing)
                 .Respond(messageFactory => messageFactory.Saga)
         );
-        Event(() => Awake, config => config.CorrelateById(theDeveloper => theDeveloper.Message.Id));
-        Event(() => Tired, config => config.CorrelateById(theDeveloper => theDeveloper.Message.Id));
-        Event(() => NewDay, config => config.CorrelateById(theDeveloper => theDeveloper.Message.Id));
-        Event(() => HowYDoing, config =>
+
+        DuringAny(
+            When(Fire)
+                .TransitionTo(Fired)
+        );
+
+        SetCompleted(async developer =>
         {
-            config.CorrelateById(theDeveloper => theDeveloper.Message.Id);
-            config.ReadOnly = true;
-            config.OnMissingInstance(behavior => behavior.Execute(context =>
-            {
-                context.Respond(new UnknownDeveloper());
-            }));
+            var fired = await this.GetState(developer);
+            return Fired!.Equals(fired);
         });
+
     }
     /// <summary>
     /// 3
@@ -129,10 +155,13 @@ public class Developer : MassTransitStateMachine<TheDeveloper>
     /// 4
     /// </summary>
     public State? Sleeping { get; set; }
+    public State? Fired { get; set; }
     public Event<IAwakeEvent>? Awake { get; private set; }
     public Event<ITiredEvent>? Tired { get; private set; }
     public Event<INewDayEvent>? NewDay { get; private set; }
     public Event<IHowYDoing>? HowYDoing { get; private set; }
+    public Event<IFire>? Fire { get; private set; }
+    public Schedule<TheDeveloper, IAutoTiredEvent>? AutoTired { get; private set; }
 }
 public class TheDeveloper : SagaStateMachineInstance, ISagaVersion
 {
@@ -142,6 +171,7 @@ public class TheDeveloper : SagaStateMachineInstance, ISagaVersion
     public DeveloperState State { get => (DeveloperState)CurrentState; }
     public int SleepCount { get; set; }
     public int Version { get; set; }
+    public Guid? AutoTiredToken { get; set; }
 }
 public class UnknownDeveloper { }
 public class DeveloperStatus
@@ -157,6 +187,8 @@ public interface IAwakeEvent : IDeveloperEvent { }
 public interface ITiredEvent : IDeveloperEvent { }
 public interface INewDayEvent : IDeveloperEvent { }
 public interface IHowYDoing : IDeveloperEvent { }
+public interface IFire : IDeveloperEvent { }
+public interface IAutoTiredEvent : IDeveloperEvent { }
 public enum DeveloperState
 {
     Initial = 1,

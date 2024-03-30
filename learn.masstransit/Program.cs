@@ -2,6 +2,8 @@
 using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Hangfire;
+using Hangfire.Redis.StackExchange;
 using learn.masstransit;
 using MassTransit;
 using Microsoft.AspNetCore.Builder;
@@ -14,19 +16,29 @@ var builder = WebApplication.CreateBuilder(args);
 
 var services = builder.Services;
 
+GlobalConfiguration.Configuration.UseRedisStorage();
+
+services.AddHangfire(h =>
+{
+    h.UseRecommendedSerializerSettings();
+    h.UseRedisStorage();
+});
+
 services.AddMassTransit(busConfig =>
 {
     var currentAssembly = Assembly.GetExecutingAssembly();
 
     busConfig.AddSagas(currentAssembly);
     busConfig.AddSagaStateMachine<Developer, TheDeveloper>()
-        .InMemoryRepository();
+        .RedisRepository();
 
     busConfig.AddRequestClient<IRequestClient<IHowYDoing>>();
     busConfig.AddRequestClient<IRequestClient<IAwakeEvent>>();
 
     busConfig.UsingInMemory((context, inMemoryConfig) =>
     {
+        inMemoryConfig.UseHangfireScheduler();
+
         inMemoryConfig.ConfigureEndpoints(context);
     });
 });
@@ -89,6 +101,14 @@ app.MapGet("howydoing/{id}", async (Guid id, IRequestClient<IHowYDoing> howYDoin
     }
 
     return Results.NotFound(id);
+});
+
+app.MapGet("fire/{id}", async (Guid id, IBus bus) =>
+{
+    await bus.Publish<IFire>(new
+    {
+        Id = id
+    });
 });
 
 await app.RunAsync();
